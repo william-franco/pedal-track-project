@@ -1,5 +1,40 @@
 # Pedal Track Backend
 
+Backend para o projeto PedalTrack.
+
+
+## Libraries
+
+dotnet add package Microsoft.EntityFrameworkCore.Sqlite --version 10.0.0
+dotnet add package Microsoft.EntityFrameworkCore.Design --version 10.0.0
+dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer --version 10.0.0
+dotnet add package Microsoft.IdentityModel.Tokens --version 8.7.0
+dotnet add package System.IdentityModel.Tokens.Jwt --version 8.7.0
+dotnet add package BCrypt.Net-Next --version 4.0.3
+dotnet add package Scalar.AspNetCore --version 2.*
+
+
+## Migrations
+
+dotnet tool install --global dotnet-ef --version 10.*
+or
+dotnet tool update --global dotnet-ef --version 10.*
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+
+
+## Run Project
+
+dotnet build
+dotnet run
+
+
+## Accessing
+
+API: http://localhost:5000/api
+
+Scalar: http://localhost:5000/scalar
+
 
 ## Examples of commits
 
