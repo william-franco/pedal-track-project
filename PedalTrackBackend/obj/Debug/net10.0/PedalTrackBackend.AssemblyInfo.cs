@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PedalTrackBackend")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+5c86c047165f7e3fd4140230dc3f9cbaecba97a0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4a021fb526baf28d915c9ad63df9cfdb81c6a9d5")]
 [assembly: System.Reflection.AssemblyProductAttribute("PedalTrackBackend")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PedalTrackBackend")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

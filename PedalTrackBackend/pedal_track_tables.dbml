@@ -1,0 +1,107 @@
+// PedalTrack — Database Schema
+// MVP v2.0
+
+// ======================= USERS =======================
+
+Table users {
+  id         integer     [pk, increment]
+  name       varchar(255)
+  email      varchar(255) [unique, not null]
+  password   varchar(255) [not null, note: 'bcrypt hash']
+  created_at datetime
+  updated_at datetime
+}
+
+// ======================= BIKES =======================
+
+Table bikes {
+  id         integer      [pk, increment]
+  user_id    integer      [ref: > users.id, not null]
+  nickname   varchar(255) [not null, note: 'apelido da bike, ex: Minha MTB']
+  brand      varchar(255)
+  model      varchar(255)
+  created_at datetime
+  updated_at datetime
+}
+
+// ======================= RIDES =======================
+// RF03 — registro manual de passeios
+// RF04 — ao inserir um ride, o backend distribui distance_km
+//         para o km_ridden de todas as parts ativas da bike
+
+Table rides {
+  id          integer      [pk, increment]
+  bike_id     integer      [ref: > bikes.id, not null]
+  distance_km double       [not null, note: 'km percorridos no passeio']
+  terrain     varchar(255) [note: '"seco", "chuva", "lama", "trilha", "asfalto"']
+  ridden_at   datetime     [note: 'data/hora do passeio; pode diferir de created_at']
+  created_at  datetime
+}
+
+// ======================= PARTS (PEÇAS) =======================
+// RF05 — cadastro de peça com duração esperada pelo usuário
+// RF06 — km_ridden / expected_duration_km = barra de progresso
+// RN02 — sem bloqueio ao ultrapassar 100%
+// RN06 — reparos parciais não alteram esta tabela
+
+Table parts {
+  id                   integer      [pk, increment]
+  bike_id              integer      [ref: > bikes.id, not null]
+  name                 varchar(255) [not null, note: 'ex: Pneu Traseiro, Corrente']
+  expected_duration_km double       [not null, note: 'duração estimada em km']
+  km_ridden            double       [not null, default: 0]
+  price_paid           decimal(10,2)
+  installed_at         datetime
+  status               varchar(20)  [not null, default: 'Active', note: '"Active" | "Replaced"']
+  alert_sent           boolean      [not null, default: false, note: 'RN07: alerta 90% emitido apenas uma vez']
+  created_at           datetime
+
+  Note: 'progress_percent = km_ridden / expected_duration_km * 100 (calculado em runtime, não persistido)'
+}
+
+// ======================= PART EXCHANGES (TROCAS) =======================
+// RF07 — operação de troca encerra a part atual e cria este registro
+// RN03 — dados da troca não afetam a próxima part
+// RN04 — registro imutável: sem UPDATE ou DELETE nesta tabela
+// RN05 — notes é opcional
+
+Table part_exchanges {
+  id                   integer       [pk, increment]
+  part_id              integer       [ref: > parts.id, not null, note: 'ref à part encerrada (restrict on delete)']
+  bike_id              integer       [ref: > bikes.id, not null]
+  part_name            varchar(255)  [not null, note: 'snapshot do nome no momento da troca']
+  expected_duration_km double        [not null, note: 'snapshot da duração esperada']
+  actual_km_reached    double        [not null, note: 'km real que a peça durou']
+  price_paid_at_time   decimal(10,2) [note: 'snapshot do preço pago na instalação']
+  notes                text          [note: 'RN05: observação opcional do usuário, ex: "Rasgou na pedra"']
+  exchanged_at         datetime
+  created_at           datetime
+}
+
+// ======================= MAINTENANCE ALERTS =======================
+// RF08 — gerado automaticamente pelo backend quando part atinge 90%
+// RN07 — um alerta por ciclo de vida da peça (controlado por parts.alert_sent)
+// Não possui endpoint de criação manual
+
+Table maintenance_alerts {
+  id           integer      [pk, increment]
+  bike_id      integer      [ref: > bikes.id, not null]
+  part_id      integer      [ref: > parts.id, not null]
+  message      text         [not null, note: 'ex: "Peça Pneu Traseiro atingiu 90% da vida útil"']
+  triggered_at datetime
+  created_at   datetime
+}
+
+// ======================= MAINTENANCE CHECKLISTS =======================
+// RF09 — cada linha representa uma execução completa do checklist
+// items_checked armazena os itens marcados separados por vírgula
+// ex: "corrente,pneus,freios,câmbio,iluminação"
+
+Table maintenance_checklists {
+  id            integer [pk, increment]
+  bike_id       integer [ref: > bikes.id, not null]
+  executed_at   datetime
+  items_checked text    [note: 'itens marcados: corrente, pneus, freios, câmbio, iluminação, pedal, banco, chassi, cubo/aro, cabos']
+  notes         text    [note: 'observação opcional da execução']
+  created_at    datetime
+}
