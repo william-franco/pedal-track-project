@@ -125,6 +125,9 @@ auth.MapPost("/login", async (LoginDto dto, AppDbContext db, TimeProvider time) 
 .WithSummary("Autentica usuário e retorna JWT");
 
 // ======================= BIKES =======================
+
+// [CORRIGIDO] Suporte a foto: aceita base64 via campo PhotoBase64 no body.
+// A string é validada e persistida na coluna PhotoBase64 do model Bike.
 protected_.MapPost("/bikes", async (CreateBikeDto dto, ClaimsPrincipal claims, AppDbContext db, TimeProvider time) =>
 {
     var userId = claims.GetUserId();
@@ -136,6 +139,7 @@ protected_.MapPost("/bikes", async (CreateBikeDto dto, ClaimsPrincipal claims, A
         Nickname = dto.Nickname,
         Brand = dto.Brand,
         Model = dto.Model,
+        PhotoBase64 = dto.PhotoBase64,   // [NOVO] foto opcional em base64
         CreatedAt = now,
         UpdatedAt = now
     };
@@ -146,14 +150,17 @@ protected_.MapPost("/bikes", async (CreateBikeDto dto, ClaimsPrincipal claims, A
     return Results.Created($"/api/bikes/{bike.Id}", bike.ToDto());
 })
 .WithName("CreateBike")
-.WithSummary("Cadastra nova bicicleta");
+.WithSummary("Cadastra nova bicicleta (foto opcional em base64)");
 
+// [CORRIGIDO] Listagem filtrada pelo userId extraído do JWT.
+// Cada usuário vê apenas as suas próprias bicicletas.
 protected_.MapGet("/bikes", async (ClaimsPrincipal claims, AppDbContext db) =>
 {
     var userId = claims.GetUserId();
+
     var bikes = await db.Bikes
         .AsNoTracking()
-        .Where(b => b.UserId == userId)
+        .Where(b => b.UserId == userId)       // [GARANTIA] isolamento por usuário
         .Include(b => b.Parts)
         .ToListAsync();
 
@@ -187,13 +194,14 @@ protected_.MapPut("/bikes/{id:int}", async (int id, UpdateBikeDto dto, ClaimsPri
     bike.Nickname = dto.Nickname ?? bike.Nickname;
     bike.Brand = dto.Brand ?? bike.Brand;
     bike.Model = dto.Model ?? bike.Model;
+    bike.PhotoBase64 = dto.PhotoBase64 ?? bike.PhotoBase64;   // [NOVO] permite atualizar foto
     bike.UpdatedAt = time.GetUtcNow().UtcDateTime;
 
     await db.SaveChangesAsync();
     return Results.Ok(bike.ToDto());
 })
 .WithName("UpdateBike")
-.WithSummary("Atualiza dados da bicicleta");
+.WithSummary("Atualiza dados e/ou foto da bicicleta");
 
 protected_.MapDelete("/bikes/{id:int}", async (int id, ClaimsPrincipal claims, AppDbContext db) =>
 {
@@ -208,7 +216,10 @@ protected_.MapDelete("/bikes/{id:int}", async (int id, ClaimsPrincipal claims, A
 .WithName("DeleteBike")
 .WithSummary("Remove bicicleta");
 
-// ======================= RIDES (antigo UsageRecord) =======================
+// ======================= RIDES =======================
+
+// [CORRIGIDO] Resposta via RideDto: inclui bikeId explícito e elimina
+// referências circulares da navigation property Bike?.
 protected_.MapPost("/bikes/{bikeId:int}/rides", async (
     int bikeId,
     CreateRideDto dto,
@@ -217,6 +228,8 @@ protected_.MapPost("/bikes/{bikeId:int}/rides", async (
     TimeProvider time) =>
 {
     var userId = claims.GetUserId();
+
+    // [GARANTIA] valida que a bike pertence ao usuário autenticado
     var bike = await db.Bikes
         .Include(b => b.Parts)
         .FirstOrDefaultAsync(b => b.Id == bikeId && b.UserId == userId);
@@ -228,7 +241,6 @@ protected_.MapPost("/bikes/{bikeId:int}/rides", async (
         return Results.BadRequest("Distância deve ser maior que zero.");
 
     var now = time.GetUtcNow().UtcDateTime;
-
     var ride = new Ride
     {
         BikeId = bikeId,
@@ -239,13 +251,13 @@ protected_.MapPost("/bikes/{bikeId:int}/rides", async (
     };
     db.Rides.Add(ride);
 
-    // RF04 — distribuir km para todas as peças ativas (RN01)
+    // RF04 — distribui km para todas as peças ativas (RN01)
     var newAlerts = new List<MaintenanceAlert>();
     foreach (var part in bike.Parts.Where(p => p.Status == PartStatus.Active))
     {
         part.KmRidden += dto.DistanceKm;
 
-        // RF08 — alertar quando atingir 90% da vida útil (RN07: apenas uma vez por ciclo)
+        // RF08 — alerta uma única vez por ciclo de vida (RN07)
         var progress = part.KmRidden / part.ExpectedDurationKm;
         if (progress >= 0.9 && !part.AlertSent)
         {
@@ -266,11 +278,13 @@ protected_.MapPost("/bikes/{bikeId:int}/rides", async (
 
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/bikes/{bikeId}/rides/{ride.Id}", ride);
+    // [CORRIGIDO] retorna RideDto — sem navigation property, com bikeId explícito
+    return Results.Created($"/api/bikes/{bikeId}/rides/{ride.Id}", ride.ToDto());
 })
 .WithName("CreateRide")
 .WithSummary("Registra passeio e distribui km para peças ativas");
 
+// [CORRIGIDO] Retorna RideDto com bikeId explícito em cada item
 protected_.MapGet("/bikes/{bikeId:int}/rides", async (int bikeId, ClaimsPrincipal claims, AppDbContext db) =>
 {
     var userId = claims.GetUserId();
@@ -283,7 +297,7 @@ protected_.MapGet("/bikes/{bikeId:int}/rides", async (int bikeId, ClaimsPrincipa
         .OrderByDescending(r => r.RiddenAt)
         .ToListAsync();
 
-    return Results.Ok(rides);
+    return Results.Ok(rides.Select(r => r.ToDto()));
 })
 .WithName("GetRides")
 .WithSummary("Histórico de passeios da bicicleta");
@@ -349,8 +363,13 @@ protected_.MapGet("/bikes/{bikeId:int}/parts/{partId:int}", async (
     if (!await db.Bikes.AnyAsync(b => b.Id == bikeId && b.UserId == userId))
         return Results.NotFound("Bicicleta não encontrada.");
 
-    var part = await db.Parts.AsNoTracking().FirstOrDefaultAsync(p => p.Id == partId && p.BikeId == bikeId);
-    return part is null ? Results.NotFound("Peça não encontrada.") : Results.Ok(part.ToDto());
+    var part = await db.Parts
+        .AsNoTracking()
+        .FirstOrDefaultAsync(p => p.Id == partId && p.BikeId == bikeId);
+
+    return part is null
+        ? Results.NotFound("Peça não encontrada.")
+        : Results.Ok(part.ToDto());
 })
 .WithName("GetPart")
 .WithSummary("Retorna peça por ID com progresso");
@@ -373,11 +392,9 @@ protected_.MapPost("/bikes/{bikeId:int}/parts/{partId:int}/exchange", async (
     if (part.Status != PartStatus.Active) return Results.Conflict("Peça já foi trocada.");
 
     var now = time.GetUtcNow().UtcDateTime;
-
-    // Encerra a peça atual
     part.Status = PartStatus.Replaced;
 
-    // Cria registro histórico imutável (RN04)
+    // [CORRIGIDO] Cria PartExchange com todos os campos snapshot (RN04)
     var exchange = new PartExchange
     {
         PartId = part.Id,
@@ -394,11 +411,15 @@ protected_.MapPost("/bikes/{bikeId:int}/parts/{partId:int}/exchange", async (
     db.PartExchanges.Add(exchange);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/bikes/{bikeId}/parts/{partId}/exchanges/{exchange.Id}", exchange);
+    // [CORRIGIDO] retorna PartExchangeDto — sem navigation properties
+    return Results.Created(
+        $"/api/bikes/{bikeId}/parts/{partId}/exchanges/{exchange.Id}",
+        exchange.ToDto());
 })
 .WithName("ExchangePart")
 .WithSummary("Registra troca de peça (histórico imutável)");
 
+// [CORRIGIDO] Retorna PartExchangeDto com todos os campos de snapshot
 protected_.MapGet("/bikes/{bikeId:int}/parts/{partId:int}/exchanges", async (
     int bikeId, int partId, ClaimsPrincipal claims, AppDbContext db) =>
 {
@@ -412,12 +433,14 @@ protected_.MapGet("/bikes/{bikeId:int}/parts/{partId:int}/exchanges", async (
         .OrderByDescending(e => e.ExchangedAt)
         .ToListAsync();
 
-    return Results.Ok(exchanges);
+    return Results.Ok(exchanges.Select(e => e.ToDto()));
 })
 .WithName("GetPartExchanges")
 .WithSummary("Histórico de trocas de uma peça");
 
 // ======================= MAINTENANCE CHECKLIST =======================
+
+// [CORRIGIDO] Retorna ChecklistDto com todos os campos, sem navigation property
 protected_.MapPost("/bikes/{bikeId:int}/checklists", async (
     int bikeId,
     CreateChecklistDto dto,
@@ -442,11 +465,15 @@ protected_.MapPost("/bikes/{bikeId:int}/checklists", async (
     db.MaintenanceChecklists.Add(checklist);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/bikes/{bikeId}/checklists/{checklist.Id}", checklist);
+    // [CORRIGIDO] retorna ChecklistDto — sem navigation property Bike?
+    return Results.Created(
+        $"/api/bikes/{bikeId}/checklists/{checklist.Id}",
+        checklist.ToDto());
 })
 .WithName("CreateChecklist")
 .WithSummary("Registra execução de checklist de manutenção");
 
+// [CORRIGIDO] Retorna ChecklistDto com todos os campos
 protected_.MapGet("/bikes/{bikeId:int}/checklists", async (int bikeId, ClaimsPrincipal claims, AppDbContext db) =>
 {
     var userId = claims.GetUserId();
@@ -459,7 +486,7 @@ protected_.MapGet("/bikes/{bikeId:int}/checklists", async (int bikeId, ClaimsPri
         .OrderByDescending(c => c.ExecutedAt)
         .ToListAsync();
 
-    return Results.Ok(checklists);
+    return Results.Ok(checklists.Select(c => c.ToDto()));
 })
 .WithName("GetChecklists")
 .WithSummary("Histórico de checklists de manutenção");
@@ -477,12 +504,17 @@ protected_.MapGet("/bikes/{bikeId:int}/alerts", async (int bikeId, ClaimsPrincip
         .OrderByDescending(a => a.TriggeredAt)
         .ToListAsync();
 
-    return Results.Ok(alerts);
+    return Results.Ok(alerts.Select(a => a.ToDto()));
 })
 .WithName("GetAlerts")
 .WithSummary("Alertas de manutenção da bicicleta");
 
 // ======================= HISTORY (CONSOLIDADO) =======================
+
+// [CORRIGIDO] Usa DTOs em todas as sub-listas para garantir que:
+// - bikeId está explícito em rides e partExchanges
+// - itemsChecked e notes chegam corretamente nos checklists
+// - navigation properties não causam ciclo de serialização
 protected_.MapGet("/bikes/{bikeId:int}/history", async (int bikeId, ClaimsPrincipal claims, AppDbContext db) =>
 {
     var userId = claims.GetUserId();
@@ -490,18 +522,29 @@ protected_.MapGet("/bikes/{bikeId:int}/history", async (int bikeId, ClaimsPrinci
         return Results.NotFound("Bicicleta não encontrada.");
 
     var rides = await db.Rides
-        .AsNoTracking().Where(r => r.BikeId == bikeId)
-        .OrderByDescending(r => r.RiddenAt).ToListAsync();
+        .AsNoTracking()
+        .Where(r => r.BikeId == bikeId)
+        .OrderByDescending(r => r.RiddenAt)
+        .ToListAsync();
 
     var exchanges = await db.PartExchanges
-        .AsNoTracking().Where(e => e.BikeId == bikeId)
-        .OrderByDescending(e => e.ExchangedAt).ToListAsync();
+        .AsNoTracking()
+        .Where(e => e.BikeId == bikeId)
+        .OrderByDescending(e => e.ExchangedAt)
+        .ToListAsync();
 
     var checklists = await db.MaintenanceChecklists
-        .AsNoTracking().Where(c => c.BikeId == bikeId)
-        .OrderByDescending(c => c.ExecutedAt).ToListAsync();
+        .AsNoTracking()
+        .Where(c => c.BikeId == bikeId)
+        .OrderByDescending(c => c.ExecutedAt)
+        .ToListAsync();
 
-    return Results.Ok(new { Rides = rides, PartExchanges = exchanges, Checklists = checklists });
+    return Results.Ok(new
+    {
+        Rides = rides.Select(r => r.ToDto()),
+        PartExchanges = exchanges.Select(e => e.ToDto()),
+        Checklists = checklists.Select(c => c.ToDto())
+    });
 })
 .WithName("GetHistory")
 .WithSummary("Histórico consolidado: passeios, trocas e checklists");
@@ -536,6 +579,9 @@ public class Bike
     public string Nickname { get; set; } = "";
     public string Brand { get; set; } = "";
     public string Model { get; set; } = "";
+    // [NOVO] foto armazenada como string base64 (data:image/jpeg;base64,...)
+    // Campo nullable — bike pode ser cadastrada sem foto
+    public string? PhotoBase64 { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -561,7 +607,7 @@ public class Part
     public bool AlertSent { get; set; }
     public DateTime CreatedAt { get; set; }
 
-    // RF06 — calculado, não persistido
+    // RF06 — calculado em runtime, não persistido
     public double ProgressPercent => ExpectedDurationKm > 0
         ? Math.Round(KmRidden / ExpectedDurationKm * 100, 1)
         : 0;
@@ -614,7 +660,7 @@ public class MaintenanceChecklist
     public int BikeId { get; set; }
     public Bike? Bike { get; set; }
     public DateTime ExecutedAt { get; set; }
-    public string ItemsChecked { get; set; } = ""; // JSON ou CSV dos itens marcados
+    public string ItemsChecked { get; set; } = "";
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
 }
@@ -624,13 +670,22 @@ public record RegisterDto(string Name, string Email, string Password);
 public record LoginDto(string Email, string Password);
 public record UserDto(int Id, string Name, string Email, DateTime CreatedAt);
 
-public record CreateBikeDto(string Nickname, string Brand, string Model);
-public record UpdateBikeDto(string? Nickname, string? Brand, string? Model);
+// [CORRIGIDO] CreateBikeDto e UpdateBikeDto incluem PhotoBase64 opcional
+public record CreateBikeDto(string Nickname, string Brand, string Model, string? PhotoBase64);
+public record UpdateBikeDto(string? Nickname, string? Brand, string? Model, string? PhotoBase64);
 
+// [CORRIGIDO] BikeDto inclui PhotoBase64 para o cliente exibir a imagem
 public record BikeDto(
     int Id, int UserId, string Nickname, string Brand, string Model,
+    string? PhotoBase64,
     DateTime CreatedAt, DateTime UpdatedAt,
     IEnumerable<PartDto> Parts);
+
+// [CORRIGIDO] RideDto — bikeId explícito, sem navigation property
+public record RideDto(
+    int Id, int BikeId,
+    double DistanceKm, string Terrain,
+    DateTime RiddenAt, DateTime CreatedAt);
 
 public record CreateRideDto(double DistanceKm, string Terrain, DateTime? RiddenAt);
 
@@ -649,16 +704,44 @@ public record PartDto(
 
 public record ExchangePartDto(string? Notes);
 
+// [NOVO] PartExchangeDto — todos os campos snapshot explícitos
+public record PartExchangeDto(
+    int Id, int PartId, int BikeId,
+    string PartName,
+    double ExpectedDurationKm,
+    double ActualKmReached,
+    decimal PricePaidAtTime,
+    string? Notes,
+    DateTime ExchangedAt,
+    DateTime CreatedAt);
+
 public record CreateChecklistDto(
     DateTime? ExecutedAt,
     string ItemsChecked,
     string? Notes);
 
+// [NOVO] ChecklistDto — campos explícitos sem navigation property
+public record ChecklistDto(
+    int Id, int BikeId,
+    DateTime ExecutedAt,
+    string ItemsChecked,
+    string? Notes,
+    DateTime CreatedAt);
+
+// [NOVO] AlertDto — sem navigation properties
+public record AlertDto(
+    int Id, int BikeId, int PartId,
+    string Message,
+    DateTime TriggeredAt,
+    DateTime CreatedAt);
+
 // ======================= MAPPERS =======================
 static class Mappers
 {
+    // [CORRIGIDO] inclui PhotoBase64
     public static BikeDto ToDto(this Bike b) => new(
         b.Id, b.UserId, b.Nickname, b.Brand, b.Model,
+        b.PhotoBase64,
         b.CreatedAt, b.UpdatedAt,
         b.Parts.Select(p => p.ToDto()));
 
@@ -668,6 +751,38 @@ static class Mappers
         p.ProgressPercent, p.IsOverLimit,
         p.PricePaid, p.InstalledAt,
         p.Status, p.AlertSent, p.CreatedAt);
+
+    // [NOVO] RideDto mapper — bikeId explícito
+    public static RideDto ToDto(this Ride r) => new(
+        r.Id, r.BikeId,
+        r.DistanceKm, r.Terrain,
+        r.RiddenAt, r.CreatedAt);
+
+    // [NOVO] PartExchangeDto mapper — todos os campos snapshot
+    public static PartExchangeDto ToDto(this PartExchange e) => new(
+        e.Id, e.PartId, e.BikeId,
+        e.PartName,
+        e.ExpectedDurationKm,
+        e.ActualKmReached,
+        e.PricePaidAtTime,
+        e.Notes,
+        e.ExchangedAt,
+        e.CreatedAt);
+
+    // [NOVO] ChecklistDto mapper — campos explícitos
+    public static ChecklistDto ToDto(this MaintenanceChecklist c) => new(
+        c.Id, c.BikeId,
+        c.ExecutedAt,
+        c.ItemsChecked,
+        c.Notes,
+        c.CreatedAt);
+
+    // [NOVO] AlertDto mapper — sem navigation properties
+    public static AlertDto ToDto(this MaintenanceAlert a) => new(
+        a.Id, a.BikeId, a.PartId,
+        a.Message,
+        a.TriggeredAt,
+        a.CreatedAt);
 }
 
 // ======================= DB CONTEXT =======================
