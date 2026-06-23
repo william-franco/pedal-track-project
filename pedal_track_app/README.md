@@ -18,11 +18,11 @@ open coverage/html/index.html
 
 | Image 1 | Image 2 | Image 3 |
 |----------|----------|----------|
-| ![App Screenshot](assets/screenshots/screen-1.png) | ![App Screenshot](assets/screenshots/screen-2.png) | ![App Screenshot](assets/screenshots/screen-3.png) |
+| ![App Screenshot](assets/screenshots/screen-1.jpg) | ![App Screenshot](assets/screenshots/screen-1.jpg) | ![App Screenshot](assets/screenshots/screen-1.jpg) |
 
 | Image 4 | Image 5 | Image 6 |
 |----------|----------|----------|
-| ![App Screenshot](assets/screenshots/screen-4.png) | ![App Screenshot](assets/screenshots/screen-5.png) | ![App Screenshot](assets/screenshots/screen-6.png) |
+| ![App Screenshot](assets/screenshots/screen-1.jpg) | ![App Screenshot](assets/screenshots/screen-1.jpg) | ![App Screenshot](assets/screenshots/screen-1.jpg) |
 
 
 ## Examples of commits
